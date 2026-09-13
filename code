@@ -1,6 +1,6 @@
-#define BLYNK_TEMPLATE_ID "TMPL37TORwBKF"
+#define BLYNK_TEMPLATE_ID "xxx"
 #define BLYNK_TEMPLATE_NAME "smart iv drip monitoring"
-#define BLYNK_AUTH_TOKEN "CfrcAzgjfE4Zoyt9PG4Tl977o9RxsMsH"
+#define BLYNK_AUTH_TOKEN "xxx"
 
 #include <WiFi.h>
 #include <BlynkSimpleEsp32.h>
@@ -10,8 +10,8 @@
 // WIFI
 // =================================================
 
-char ssid[] = "Galaxy m47";
-char pass[] = "dhas1234";
+char ssid[] = "xxx";
+char pass[] = "xxx";
 
 // =================================================
 // PINS
