@@ -1,1 +1,366 @@
+#define BLYNK_TEMPLATE_ID "TMPL37TORwBKF"
+#define BLYNK_TEMPLATE_NAME "smart iv drip monitoring"
+#define BLYNK_AUTH_TOKEN "CfrcAzgjfE4Zoyt9PG4Tl977o9RxsMsH"
+
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+#include <ESP32Servo.h>
+
+// =================================================
+// WIFI
+// =================================================
+
+char ssid[] = "Galaxy m47";
+char pass[] = "dhas1234";
+
+// =================================================
+// PINS
+// =================================================
+
+#define IR_PIN 27
+#define SERVO_PIN 18
+
+Servo dripServo;
+
+// =================================================
+// SERVO
+// =================================================
+
+const int SERVO_OPEN = 20;
+const int SERVO_CLOSE = 90;
+
+// =================================================
+// DROP COUNT
+// =================================================
+
+volatile unsigned long dropCount = 0;
+volatile unsigned long lastDropTime = 0;
+
+const unsigned long debounceTime = 200;
+
+// =================================================
+// FLOW
+// =================================================
+
+const unsigned long FLOW_INTERVAL = 10000;
+
+// Change according to your IV set
+const float DROP_FACTOR = 20.0;
+
+// Maximum allowed flow rate
+const float MAX_FLOW = 1.5;
+
+// No drop for 10 seconds
+const unsigned long NO_FLOW_TIME = 10000;
+
+// =================================================
+// VARIABLES
+// =================================================
+
+unsigned long previousDropCount = 0;
+unsigned long lastFlowCalculation = 0;
+unsigned long lastPrintTime = 0;
+
+float dropsPerMinute = 0;
+float flowRate = 0;
+
+bool servoClosed = false;
+
+String currentStatus = "STARTING";
+
+// =================================================
+// BLYNK TIMER
+// =================================================
+
+BlynkTimer timer;
+
+// =================================================
+// DROP DETECTION
+// =================================================
+
+void IRAM_ATTR detectDrop()
+{
+  unsigned long currentTime = millis();
+
+  if (currentTime - lastDropTime > debounceTime)
+  {
+    dropCount++;
+    lastDropTime = currentTime;
+  }
+}
+
+// =================================================
+// SEND DATA TO BLYNK
+// =================================================
+
+void sendToBlynk()
+{
+  noInterrupts();
+
+  unsigned long currentDrops = dropCount;
+  unsigned long lastDrop = lastDropTime;
+
+  interrupts();
+
+  // Total drops
+  Blynk.virtualWrite(V0, currentDrops);
+
+  // Drops per minute
+  Blynk.virtualWrite(V1, dropsPerMinute);
+
+  // Flow rate
+  Blynk.virtualWrite(V2, flowRate);
+
+  // Status
+  Blynk.virtualWrite(V3, currentStatus);
+
+  // Servo status
+  if (servoClosed)
+  {
+    Blynk.virtualWrite(V4, "CLOSED");
+  }
+  else
+  {
+    Blynk.virtualWrite(V4, "OPEN");
+  }
+
+  // Maximum flow
+  Blynk.virtualWrite(V5, MAX_FLOW);
+}
+
+// =================================================
+// FLOW CALCULATION
+// =================================================
+
+void calculateFlow()
+{
+  unsigned long currentTime = millis();
+
+  noInterrupts();
+
+  unsigned long currentDrops = dropCount;
+  unsigned long lastDrop = lastDropTime;
+
+  interrupts();
+
+  // Drops detected during last 10 seconds
+  unsigned long dropsIn10Seconds =
+    currentDrops - previousDropCount;
+
+  previousDropCount = currentDrops;
+
+  // Convert to drops/min
+  dropsPerMinute =
+    dropsIn10Seconds * 6.0;
+
+  // Convert drops/min to mL/min
+  flowRate =
+    dropsPerMinute / DROP_FACTOR;
+
+  // =================================================
+  // SERIAL DISPLAY
+  // =================================================
+
+  Serial.println();
+  Serial.println("--------------------------------");
+
+  Serial.print("Total Drops      : ");
+  Serial.println(currentDrops);
+
+  Serial.print("Drops in 10 sec  : ");
+  Serial.println(dropsIn10Seconds);
+
+  Serial.print("Drops/min        : ");
+  Serial.println(dropsPerMinute, 2);
+
+  Serial.print("Flow Rate        : ");
+  Serial.print(flowRate, 2);
+  Serial.println(" mL/min");
+
+  // =================================================
+  // NO FLOW
+  // =================================================
+
+  if (currentTime - lastDrop >= NO_FLOW_TIME)
+  {
+    currentStatus = "NO FLOW";
+
+    Serial.println();
+    Serial.println("!!! NO FLOW DETECTED !!!");
+
+    dripServo.write(SERVO_CLOSE);
+
+    servoClosed = true;
+  }
+
+  // =================================================
+  // FLOW TOO HIGH
+  // =================================================
+
+  else if (flowRate > MAX_FLOW)
+  {
+    currentStatus = "FLOW TOO HIGH";
+
+    Serial.println();
+    Serial.println("!!! FLOW TOO HIGH !!!");
+
+    dripServo.write(SERVO_CLOSE);
+
+    servoClosed = true;
+  }
+
+  // =================================================
+  // NORMAL FLOW
+  // =================================================
+
+  else
+  {
+    currentStatus = "NORMAL";
+
+    Serial.println();
+    Serial.println("FLOW NORMAL");
+
+    dripServo.write(SERVO_OPEN);
+
+    servoClosed = false;
+  }
+
+  Serial.print("Status           : ");
+  Serial.println(currentStatus);
+
+  Serial.print("Servo             : ");
+
+  if (servoClosed)
+    Serial.println("CLOSED");
+  else
+    Serial.println("OPEN");
+
+  Serial.println("--------------------------------");
+
+  // Send immediately to Blynk
+  sendToBlynk();
+}
+
+// =================================================
+// MANUAL SERVO CONTROL
+// =================================================
+//
+// V6:
+// 0 = Automatic
+// 1 = Force OPEN
+// 2 = Force CLOSE
+//
+// =================================================
+
+BLYNK_WRITE(V6)
+{
+  int command = param.asInt();
+
+  if (command == 1)
+  {
+    dripServo.write(SERVO_OPEN);
+    servoClosed = false;
+
+    Serial.println("Blynk: Servo manually OPENED");
+  }
+
+  else if (command == 2)
+  {
+    dripServo.write(SERVO_CLOSE);
+    servoClosed = true;
+
+    Serial.println("Blynk: Servo manually CLOSED");
+  }
+
+  else
+  {
+    Serial.println("Blynk: Automatic mode");
+  }
+
+  sendToBlynk();
+}
+
+// =================================================
+// SETUP
+// =================================================
+
+void setup()
+{
+  Serial.begin(115200);
+
+  // IR sensor
+  pinMode(IR_PIN, INPUT);
+
+  // Servo
+  dripServo.attach(SERVO_PIN);
+
+  // Start with tube OPEN
+  dripServo.write(SERVO_OPEN);
+
+  // Interrupt
+  attachInterrupt(
+    digitalPinToInterrupt(IR_PIN),
+    detectDrop,
+    FALLING
+  );
+
+  // =================================================
+  // BLYNK CONNECTION
+  // =================================================
+
+  Blynk.begin(
+    BLYNK_AUTH_TOKEN,
+    ssid,
+    pass
+  );
+
+  lastFlowCalculation = millis();
+
+  // Calculate flow every 10 seconds
+  timer.setInterval(10000L, calculateFlow);
+
+  // Send data to Blynk every 1 second
+  timer.setInterval(1000L, sendToBlynk);
+
+  Serial.println();
+  Serial.println("================================");
+  Serial.println(" SMART IV DRIP MONITORING");
+  Serial.println("================================");
+  Serial.println("System Started");
+  Serial.println("Servo: OPEN");
+  Serial.println("Blynk Connecting...");
+}
+
+// =================================================
+// LOOP
+// =================================================
+
+void loop()
+{
+  Blynk.run();
+  timer.run();
+
+  unsigned long currentTime = millis();
+
+  // Print drops every second
+  if (currentTime - lastPrintTime >= 1000)
+  {
+    lastPrintTime = currentTime;
+
+    noInterrupts();
+
+    unsigned long currentDrops = dropCount;
+    unsigned long lastDrop = lastDropTime;
+
+    interrupts();
+
+    Serial.print("Total Drops: ");
+    Serial.print(currentDrops);
+
+    Serial.print(" | Time since last drop: ");
+    Serial.print(currentTime - lastDrop);
+
+    Serial.println(" ms");
+  }
+}
 
